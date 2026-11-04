@@ -363,10 +363,9 @@
     {
       "identity" : "swift-winui",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/moreSwift/swift-winui",
+      "location" : "https://github.com/MrIron-no/swift-winui",
       "state" : {
-        "revision" : "c4f1cb75c02f4a4fdefcef2e5c5c4388c7cf9389",
-        "version" : "0.2.2"
+        "revision" : "0b0dafe940750ca0621fa203c067360ec725bf6d"
       }
     },
     {
