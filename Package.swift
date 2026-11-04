@@ -170,8 +170,8 @@ let package = Package(
             .upToNextMinor(from: "0.5.0")
         ),
         .package(
-            url: "https://github.com/moreSwift/swift-winui",
-            .upToNextMinor(from: "0.2.2")
+            url: "https://github.com/MrIron-no/swift-winui",
+            revision: "0b0dafe940750ca0621fa203c067360ec725bf6d"
         ),
         .package(
             url: "https://github.com/stackotter/swift-benchmark",
