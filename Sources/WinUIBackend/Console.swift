@@ -20,9 +20,19 @@ extension WinUIBackend {
         guard !consoleStreams.isEmpty else {
             return
         }
+        let redirectedHandles = StandardStream.allCases
+            .filter { !consoleStreams.contains($0) }
+            .map { ($0.handleID, GetStdHandle($0.handleID)) }
         try Self.releaseConsole(consoleStreams)
         // -1 attaches to parent's console
         if AttachConsole(DWORD(bitPattern: -1)) {
+            // AttachConsole points the standard handles at the console unless
+            // the process was started with STARTF_USESTDHANDLES, which cmd.exe
+            // doesn't use for its own redirections (`app.exe > out.txt`), so
+            // put the redirected ones back.
+            for (handleID, handle) in redirectedHandles {
+                SetStdHandle(handleID, handle)
+            }
             try Self.redirectConsoleIO(consoleStreams)
             // Only after the redirection: releasing stdout onto NUL can leave
             // STD_OUTPUT_HANDLE pointing at NUL (the CRT updates it for console
