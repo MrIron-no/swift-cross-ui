@@ -17,13 +17,20 @@ extension WinUIBackend {
     /// Adapted from: https://stackoverflow.com/a/55875595/8268001
     static func attachToParentConsole() throws {
         let consoleStreams = StandardStream.allCases.filter { !$0.isRedirected }
+        guard !consoleStreams.isEmpty else {
+            return
+        }
         try Self.releaseConsole(consoleStreams)
         // -1 attaches to parent's console
         if AttachConsole(DWORD(bitPattern: -1)) {
-            if consoleStreams.contains(.output) {
-                try Self.adjustConsoleBuffer(1024)
-            }
             try Self.redirectConsoleIO(consoleStreams)
+            // Only after the redirection: releasing stdout onto NUL can leave
+            // STD_OUTPUT_HANDLE pointing at NUL (the CRT updates it for console
+            // apps). A bigger buffer is cosmetic, so failing to get one isn't
+            // an error.
+            if consoleStreams.contains(.output) {
+                try? Self.adjustConsoleBuffer(1024)
+            }
         }
     }
 
