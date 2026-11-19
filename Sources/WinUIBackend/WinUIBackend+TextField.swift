@@ -10,9 +10,28 @@ import WinUI
 extension WinUIBackend {
     public func createTextField() -> Widget {
         let textField = TextBox()
-        textField.textChanged.addHandler { [weak internalState] _, _ in
+        // An edit reaches the change action from `TextChanging`, which WinUI raises synchronously
+        // with `Text` already holding the new text. `TextChanged` is raised later, asynchronously
+        // (after the new text is rendered), so a view update that ran between an edit and its
+        // `TextChanged` would find the binding one edit behind the box, and `TextField`'s commit would
+        // write the old text back over the edit. GtkBackend's `changed` and AppKitBackend's
+        // `textDidChange` are synchronous in the same way. `TextChanged` still reports any change
+        // `TextChanging` did not.
+        let reportEdit: (TextBox) -> Void = { [weak internalState] textField in
             guard let internalState else { return }
-            internalState.textFieldChangeActions[ObjectIdentifier(textField)]?(textField.text)
+            let id = ObjectIdentifier(textField)
+            let text = textField.text
+            guard internalState.textFieldReportedTexts[id] != text else { return }
+            internalState.textFieldReportedTexts[id] = text
+            internalState.textFieldChangeActions[id]?(text)
+        }
+        textField.textChanging.addHandler { [weak textField] _, _ in
+            guard let textField else { return }
+            reportEdit(textField)
+        }
+        textField.textChanged.addHandler { [weak textField] _, _ in
+            guard let textField else { return }
+            reportEdit(textField)
         }
         textField.keyUp.addHandler { [weak internalState] _, event in
             guard let internalState else { return }
@@ -41,7 +60,10 @@ extension WinUIBackend {
     }
 
     public func setContent(ofTextField textField: Widget, to content: String) {
-        (textField as! TextBox).text = content
+        let textField = textField as! TextBox
+        // Not an edit: the `TextChanging` and `TextChanged` this write raises are not reported.
+        internalState.textFieldReportedTexts[ObjectIdentifier(textField)] = content
+        textField.text = content
     }
 
     public func getContent(ofTextField textField: Widget) -> String {
