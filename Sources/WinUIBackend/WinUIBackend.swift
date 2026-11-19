@@ -160,6 +160,9 @@ public final class WinUIBackend:
         var sliderChangeActions: [ObjectIdentifier: (Double) -> Void] = [:]
         var textFieldChangeActions: [ObjectIdentifier: (String) -> Void] = [:]
         var textFieldSubmitActions: [ObjectIdentifier: () -> Void] = [:]
+        /// Each text field's text as last handed to its change action or written by
+        /// `setContent(ofTextField:to:)`: an edit is reported once, and a write is not echoed back.
+        var textFieldReportedTexts: [ObjectIdentifier: String] = [:]
     }
     private var rootEnvironmentChangeHandler: (@Sendable @MainActor () -> Void)?
 
