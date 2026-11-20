@@ -160,9 +160,18 @@ public final class WinUIBackend:
         var sliderChangeActions: [ObjectIdentifier: (Double) -> Void] = [:]
         var textFieldChangeActions: [ObjectIdentifier: (String) -> Void] = [:]
         var textFieldSubmitActions: [ObjectIdentifier: () -> Void] = [:]
-        /// Each text field's text as last handed to its change action or written by
-        /// `setContent(ofTextField:to:)`: an edit is reported once, and a write is not echoed back.
+        /// Each text field's, text editor's and secure field's text as last handed to its change
+        /// action or written by its `setContent`: an edit is reported once, and a write is not
+        /// echoed back.
         var textFieldReportedTexts: [ObjectIdentifier: String] = [:]
+
+        /// Hands `text` to the change action of the control `id`, unless it is the text last
+        /// reported or written there.
+        func reportEdit(of id: ObjectIdentifier, text: String) {
+            guard textFieldReportedTexts[id] != text else { return }
+            textFieldReportedTexts[id] = text
+            textFieldChangeActions[id]?(text)
+        }
     }
     private var rootEnvironmentChangeHandler: (@Sendable @MainActor () -> Void)?
 
@@ -1316,17 +1325,15 @@ public final class WinUIBackend:
 
     public func createTextEditor() -> Widget {
         let textEditor = TextBox()
+        // Edits are reported from `TextChanging` (synchronous), as a text field's are; see
+        // `createTextField`. The storage is shared with text fields: it is the same widget type.
+        textEditor.textChanging.addHandler { [weak internalState, weak textEditor] _, _ in
+            guard let internalState, let textEditor else { return }
+            internalState.reportEdit(of: ObjectIdentifier(textEditor), text: textEditor.text)
+        }
         textEditor.textChanged.addHandler { [weak internalState, weak textEditor] _, _ in
-            guard
-                let internalState,
-                let textEditor
-            else { return }
-            guard !textEditor.shouldBlockNextChangedSignal else {
-                textEditor.shouldBlockNextChangedSignal = false
-                return
-            }
-            // Reuse this storage because it's the same widget type as a text field
-            internalState.textFieldChangeActions[ObjectIdentifier(textEditor)]?(textEditor.text)
+            guard let internalState, let textEditor else { return }
+            internalState.reportEdit(of: ObjectIdentifier(textEditor), text: textEditor.text)
         }
         textEditor.acceptsReturn = true
         textEditor.textWrapping = .wrap
@@ -1361,7 +1368,8 @@ public final class WinUIBackend:
 
     public func setContent(ofTextEditor textEditor: Widget, to content: String) {
         let textEditor = textEditor as! TextBox
-        textEditor.shouldBlockNextChangedSignal = true
+        // Not an edit: the `TextChanging` and `TextChanged` this write raises are not reported.
+        internalState.textFieldReportedTexts[ObjectIdentifier(textEditor)] = content
         textEditor.text = content
     }
 
@@ -2733,19 +2741,6 @@ final class CustomDatePicker: StackPanel {
                 x: max(timeViewSize.x, dateViewSize.x),
                 y: timeViewSize.y + dateViewSize.y + Int(self.spacing)
             )
-        }
-    }
-}
-
-extension WinUI.FrameworkElement {
-    var shouldBlockNextChangedSignal: Bool {
-        get {
-            (self.tag as? [String: Any])?["shouldBlockNextChangedSignal"] as? Bool ?? false
-        }
-        set {
-            var value = self.tag as? [String: Any] ?? [:]
-            value["shouldBlockNextChangedSignal"] = newValue
-            self.tag = value
         }
     }
 }
