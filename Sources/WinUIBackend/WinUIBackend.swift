@@ -755,9 +755,9 @@ public final class WinUIBackend:
             // gets an answer).
             let labelSize = label.desiredSize
             return SIMD2(
-                Int(labelSize.width) + 50,
+                wholeDIPs(labelSize.width) + 50,
                 // The default minimum picker height is 32 pixels
-                max(Int(labelSize.height) + 12, 32)
+                max(wholeDIPs(labelSize.height) + 12, 32)
             )
         } else if widget is ProgressRing {
             // ProgressRing appears to kind of grow to fill by default, but
@@ -799,11 +799,24 @@ public final class WinUIBackend:
         let adjustment = sizeCorrection(for: widget)
 
         let out = SIMD2(
-            Int(computedSize.width) + adjustment.x,
-            Int(computedSize.height) + adjustment.y
+            wholeDIPs(computedSize.width) + adjustment.x,
+            wholeDIPs(computedSize.height) + adjustment.y
         )
 
         return out
+    }
+
+    /// A measured length in the whole device-independent pixels SwiftCrossUI lays out in, rounded
+    /// up. WinUI measures in whole device pixels, so above 100 % scaling a desired size is rarely a
+    /// whole number of DIPs (at 125 % a step is 0.8 DIP); truncating it gave an element a size a
+    /// fraction under what it asked for, and a text block given that width trims its text with an
+    /// ellipsis. At 100 % a desired size is already whole and is unchanged. The thousandth of a DIP
+    /// absorbs the single-precision noise in `desiredSize` (106.4000015 is 133 device pixels at
+    /// 125 %, not a hair over), so a whole size is never rounded up a further pixel.
+    static func wholeDIPs(_ length: Float) -> Int {
+        let value = Double(length)
+        guard value.isFinite, value > 0 else { return 0 }
+        return Int((value - 0.001).rounded(.up))
     }
 
     /// Some elements don't get their default padding/border applied until
@@ -936,8 +949,8 @@ public final class WinUIBackend:
 
         let computedSize = textBlock.desiredSize
         return SIMD2(
-            Int(computedSize.width),
-            Int(computedSize.height)
+            wholeDIPs(computedSize.width),
+            wholeDIPs(computedSize.height)
         )
     }
 
