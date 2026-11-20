@@ -260,6 +260,10 @@ public final class WinUIBackend:
                 //   let value = try! pv.GetDoubleImpl()
 
                 self.measurementTextBlock = (self.createTextView() as! TextBlock)
+                // Measured outside any window, so it has no scale of its own to round to: its desired
+                // size is left unrounded, and `size(of:whenDisplayedIn:...)` rounds it at the scale the
+                // text is drawn at.
+                self.measurementTextBlock.useLayoutRounding = false
 
                 instance.activated.addHandler { (_, args: AppActivationArguments?) in
                     guard let args else {
@@ -907,11 +911,12 @@ public final class WinUIBackend:
         // Update the text view's environment and measure its desired line height
         updateTextView(measurementTextBlock, content: text, environment: environment)
 
-        // Measure the text's size
+        // Measure the text's size, in whole DIPs that hold it whole at the scale it is drawn at.
         var size = Self.measure(
             measurementTextBlock,
             proposedWidth: proposedWidth,
-            proposedHeight: proposedHeight
+            proposedHeight: proposedHeight,
+            scale: Self.drawingScale(of: widget)
         )
 
         var usedHeight = size.y
@@ -936,7 +941,8 @@ public final class WinUIBackend:
     private static func measure(
         _ textBlock: TextBlock,
         proposedWidth: Int?,
-        proposedHeight: Int?
+        proposedHeight: Int?,
+        scale: Double
     ) -> SIMD2<Int> {
         let allocation = WindowsFoundation.Size(
             width: proposedWidth.map(Float.init) ?? .infinity,
@@ -946,9 +952,31 @@ public final class WinUIBackend:
 
         let computedSize = textBlock.desiredSize
         return SIMD2(
-            wholeDIPs(computedSize.width),
-            wholeDIPs(computedSize.height)
+            wholeDIPs(holding: computedSize.width, at: scale),
+            wholeDIPs(holding: computedSize.height, at: scale)
         )
+    }
+
+    /// The whole DIPs an element must be given to draw an unrounded length whole at `scale`. The
+    /// window lays out in whole device pixels: the length takes ceil(length x scale) of them, and a
+    /// size given in DIPs is drawn at the nearest whole device pixel. So it is that many device pixels
+    /// in DIPs, rounded up to a whole DIP. At 125 % a label 40.9 DIP wide takes 52 device pixels
+    /// (41.6 DIP) and is given 42; given 41 it was drawn at 51 device pixels (40.8 DIP) and trimmed.
+    /// At 100 % it is the length rounded up, as before.
+    static func wholeDIPs(holding length: Float, at scale: Double) -> Int {
+        let value = Double(length)
+        guard value.isFinite, value > 0, scale.isFinite, scale > 0 else { return 0 }
+        let devicePixels = (value * scale - 0.001).rounded(.up)
+        return Int((devicePixels / scale - 0.001).rounded(.up))
+    }
+
+    /// The scale `widget` is drawn at: its window's, once it is in one; until then the system's.
+    @MainActor
+    static func drawingScale(of widget: Widget) -> Double {
+        if let scale = widget.xamlRoot?.rasterizationScale, scale > 0 {
+            return scale
+        }
+        return Double(GetDpiForSystem()) / Double(USER_DEFAULT_SCREEN_DPI)
     }
 
     public func createTextView() -> Widget {
