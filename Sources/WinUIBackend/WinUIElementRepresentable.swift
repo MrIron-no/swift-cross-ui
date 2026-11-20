@@ -143,6 +143,10 @@ extension View where Self: WinUIElementRepresentable {
         backend: Backend
     ) -> ViewLayoutResult {
         let representingWidget = widget as! RepresentingWidget<Self>
+        // `self` is the view graph's latest value of this representable; the widget was made with
+        // the first. Update (and size) from the latest, as SwiftUI calls `updateNSView` on the new
+        // struct, or inputs that change after the first update are never applied.
+        representingWidget.representable = self
         if let child = representingWidget.child,
            let savedSize = representingWidget.savedSize
         {
