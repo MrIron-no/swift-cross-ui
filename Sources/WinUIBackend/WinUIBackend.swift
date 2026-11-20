@@ -2259,9 +2259,8 @@ extension EnvironmentValues {
         control.fontWeight.weight = resolvedFont.winUIFontWeight
         control.foreground = winUIForegroundBrush
         control.isEnabled = isEnabled
-        if resolvedFont.isItalic {
-            control.fontStyle = .italic
-        }
+        // Set either way: an element updated from italic to upright text keeps its italic otherwise.
+        control.fontStyle = resolvedFont.isItalic ? .italic : .normal
         switch colorScheme {
             case .light:
                 control.requestedTheme = .light
@@ -2278,9 +2277,10 @@ extension EnvironmentValues {
         textBlock.foreground = winUIForegroundBrush
         textBlock.lineHeight = resolvedFont.lineHeight
 
-        if resolvedFont.isItalic {
-            textBlock.fontStyle = .italic
-        }
+        // Set either way: a block updated from italic to upright text keeps its italic otherwise. Every
+        // text is measured on one block (`measurementTextBlock`), so one italic text measured anywhere
+        // left every later text measured in italic, narrower than it is drawn, and trimmed.
+        textBlock.fontStyle = resolvedFont.isItalic ? .italic : .normal
     }
 }
 
