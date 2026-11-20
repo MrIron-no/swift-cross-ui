@@ -17,21 +17,13 @@ extension WinUIBackend {
         // write the old text back over the edit. GtkBackend's `changed` and AppKitBackend's
         // `textDidChange` are synchronous in the same way. `TextChanged` still reports any change
         // `TextChanging` did not.
-        let reportEdit: (TextBox) -> Void = { [weak internalState] textField in
-            guard let internalState else { return }
-            let id = ObjectIdentifier(textField)
-            let text = textField.text
-            guard internalState.textFieldReportedTexts[id] != text else { return }
-            internalState.textFieldReportedTexts[id] = text
-            internalState.textFieldChangeActions[id]?(text)
+        textField.textChanging.addHandler { [weak internalState, weak textField] _, _ in
+            guard let internalState, let textField else { return }
+            internalState.reportEdit(of: ObjectIdentifier(textField), text: textField.text)
         }
-        textField.textChanging.addHandler { [weak textField] _, _ in
-            guard let textField else { return }
-            reportEdit(textField)
-        }
-        textField.textChanged.addHandler { [weak textField] _, _ in
-            guard let textField else { return }
-            reportEdit(textField)
+        textField.textChanged.addHandler { [weak internalState, weak textField] _, _ in
+            guard let internalState, let textField else { return }
+            internalState.reportEdit(of: ObjectIdentifier(textField), text: textField.text)
         }
         textField.keyUp.addHandler { [weak internalState] _, event in
             guard let internalState else { return }
@@ -76,11 +68,16 @@ extension WinUIBackend {
 extension WinUIBackend {
     public func createSecureField() -> Widget {
         let secureField = PasswordBox()
-        secureField.passwordChanged.addHandler { [weak internalState] _, _ in
-            guard let internalState else { return }
-            internalState.textFieldChangeActions[ObjectIdentifier(secureField)]?(
-                secureField.password
-            )
+        // Edits are reported from `PasswordChanging`, raised synchronously with `Password` already
+        // new, as a text field's are from `TextChanging` (see `createTextField`); `PasswordChanged`
+        // reports any change `PasswordChanging` did not.
+        secureField.passwordChanging.addHandler { [weak internalState, weak secureField] _, _ in
+            guard let internalState, let secureField else { return }
+            internalState.reportEdit(of: ObjectIdentifier(secureField), text: secureField.password)
+        }
+        secureField.passwordChanged.addHandler { [weak internalState, weak secureField] _, _ in
+            guard let internalState, let secureField else { return }
+            internalState.reportEdit(of: ObjectIdentifier(secureField), text: secureField.password)
         }
         secureField.keyUp.addHandler { [weak internalState] _, event in
             guard let internalState else { return }
@@ -109,7 +106,11 @@ extension WinUIBackend {
     }
 
     public func setContent(ofSecureField secureField: Widget, to content: String) {
-        (secureField as! PasswordBox).password = content
+        let secureField = secureField as! PasswordBox
+        // Not an edit: the `PasswordChanging` and `PasswordChanged` this write raises are not
+        // reported.
+        internalState.textFieldReportedTexts[ObjectIdentifier(secureField)] = content
+        secureField.password = content
     }
 
     public func getContent(ofSecureField secureField: Widget) -> String {
