@@ -506,6 +506,7 @@ public final class WinUIBackend:
                         renderMenuItem(subitem, environment: environment)
                     )
                 }
+                widget.isEnabled = environment.isEnabled
                 return widget
             case .modifiedEnvironment(let item, let modification):
                 return renderMenuItem(item, environment: modification(environment))
