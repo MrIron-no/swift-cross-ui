@@ -602,10 +602,22 @@ public final class WinUIBackend:
         }
     }
 
+    /// Whether the application menu last set was empty (every window's menu bar
+    /// is then empty and hidden, as a new window's starts).
+    private var applicationMenuIsEmpty = true
+
     public func setApplicationMenu(
         _ submenus: [ResolvedMenu.Submenu],
         environment: EnvironmentValues
     ) {
+        // `_App` sets the application menu on every scene update. An app with no
+        // commands would otherwise clear every window's (empty, hidden) menu bar
+        // on each one.
+        if submenus.isEmpty && applicationMenuIsEmpty {
+            return
+        }
+        applicationMenuIsEmpty = submenus.isEmpty
+
         let items = submenus.map { submenu in
             let item = MenuBarItem()
             item.title = submenu.label
@@ -622,8 +634,8 @@ public final class WinUIBackend:
             for item in items {
                 window.menuBar.items.append(item)
             }
+            // The bar's theme is the window's color scheme (`updateWindow`).
             window.setMenuBarVisible(!items.isEmpty)
-            window.menuBar.requestedTheme = .dark
         }
     }
 
