@@ -25,21 +25,31 @@ class WinUIApplication: SwiftApplication, @unchecked Sendable {
     static let callback = Mutex<(@MainActor (WinUIApplication, AppInstance) -> Void)?>(nil)
     static let urlSchemes = Mutex<[String]>([])
 
+    /// How long a second launch waits for the key instance to take its activation
+    /// before it gives up and exits 1.
+    static let redirectTimeoutMilliseconds: DWORD = 5_000
+
     override func onLaunched(_ args: WinUI.LaunchActivatedEventArgs) {
-        // Register the schemes on each launch. Windows ignores duplicate URL
-        // scheme registrations so this is safe.
-        let schemes = Self.urlSchemes.withLock { $0 }
         var processName = ProcessInfo.processInfo.processName
         if processName.hasSuffix(".exe") {
             processName = String(processName.dropLast(".exe".count))
         }
-        for scheme in schemes {
-            ActivationRegistrationManager.registerForProtocolActivation(
-                scheme,
-                "",
-                processName,
-                ""
-            )
+
+        // Register the schemes on each launch. Windows ignores duplicate URL
+        // scheme registrations so this is safe. An app that declares no URL
+        // schemes writes nothing to the registry, and a packaged app declares
+        // its protocols in its package manifest (ActivationRegistrationManager
+        // is for unpackaged apps only), so it registers none here.
+        let schemes = Self.urlSchemes.withLock { $0 }
+        if !schemes.isEmpty && !Self.isPackaged {
+            for scheme in schemes {
+                ActivationRegistrationManager.registerForProtocolActivation(
+                    scheme,
+                    "",
+                    processName,
+                    ""
+                )
+            }
         }
 
         // Adapted from https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/applifecycle/applifecycle-single-instance
@@ -58,31 +68,99 @@ class WinUIApplication: SwiftApplication, @unchecked Sendable {
         }
     }
 
-    // Adapted from https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/applifecycle/applifecycle-single-instance
+    /// Whether this process runs from an MSIX package (it has a package identity).
+    static var isPackaged: Bool {
+        var length: UInt32 = 0
+        return GetCurrentPackageFullName(&length, nil) != APPMODEL_ERROR_NO_PACKAGE
+    }
+
+    /// Hands this launch's activation to the key instance, brings that instance
+    /// forward, and exits: 0 when the key instance took the activation, 1 when
+    /// it did not within ``redirectTimeoutMilliseconds``.
+    ///
+    /// Adapted from https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/applifecycle/applifecycle-single-instance
     static func redirectActivation(
         _ args: AppActivationArguments,
         to keyInstance: AppInstance
     ) -> Never {
-        let semaphore = DispatchSemaphore(value: 0)
-        let promise = try! keyInstance.redirectActivationToAsync(args)!
-        promise.completed = { _, _ in
-            semaphore.signal()
-        }
+        let processId = keyInstance.processId
+        // This launch holds the foreground; let the key instance take it.
+        _ = AllowSetForegroundWindow(DWORD(processId))
 
-        semaphore.wait()
+        let taken = waitForRedirect(
+            args,
+            to: keyInstance,
+            milliseconds: redirectTimeoutMilliseconds
+        )
+        guard taken else {
+            print(
+                """
+                Failed to redirect activation to key instance (pid=\(processId)) \
+                within \(redirectTimeoutMilliseconds) ms
+                """
+            )
+            Foundation.exit(1)
+        }
 
         // Bring key instance to the foreground
         do {
-            try InstancingHelpers.activateProcess(withId: Int(keyInstance.processId))
+            try InstancingHelpers.activateProcess(withId: Int(processId))
         } catch {
             print(
                 """
-                Failed to bring key instance (pid=\(keyInstance.processId)) to \
+                Failed to bring key instance (pid=\(processId)) to \
                 foreground: \(error.localizedDescription)
                 """
             )
         }
         Foundation.exit(0)
+    }
+
+    /// Redirects `args` to `keyInstance` and waits until it has been taken, at
+    /// most `milliseconds`. Answers whether it was taken.
+    ///
+    /// The calling thread is the app's UI thread, a single-threaded apartment,
+    /// which must not block in a plain wait (a `DispatchSemaphore`): the wait
+    /// dispatches COM calls and window messages meanwhile
+    /// (`CoWaitForMultipleObjects`).
+    static func waitForRedirect(
+        _ args: AppActivationArguments,
+        to keyInstance: AppInstance,
+        milliseconds: DWORD
+    ) -> Bool {
+        // Never closed: the process exits once the wait is over, and a completion
+        // that comes after a wait that gave up must not set a closed handle (which
+        // the process could have reused).
+        guard let event = CreateEventW(nil, true, false, nil) else {
+            return false
+        }
+        let operation: AnyIAsyncAction
+        do {
+            guard let made = try keyInstance.redirectActivationToAsync(args) else {
+                return false
+            }
+            operation = made
+        } catch {
+            print("Failed to redirect activation: \(error.localizedDescription)")
+            return false
+        }
+        // Raised on a thread the runtime picks (at once if the redirect is done).
+        let eventAddress = Int(bitPattern: event)
+        operation.completed = { _, _ in
+            _ = SetEvent(HANDLE(bitPattern: eventAddress))
+        }
+
+        var handles: [HANDLE?] = [event]
+        var index: DWORD = 0
+        let flags = DWORD(
+            CWMO_DISPATCH_CALLS.rawValue | CWMO_DISPATCH_WINDOW_MESSAGES.rawValue
+        )
+        let result = CoWaitForMultipleObjects(flags, milliseconds, 1, &handles, &index)
+        if result == S_OK && operation.status == .completed {
+            return true
+        }
+        try? operation.cancel()
+        return false
     }
 }
 
@@ -265,12 +343,23 @@ public final class WinUIBackend:
                 // text is drawn at.
                 self.measurementTextBlock.useLayoutRounding = false
 
+                // `AppInstance.Activated` is raised on a thread the runtime picks:
+                // the activation is handled (and the app's `onOpenURL` called) on
+                // this thread, the UI thread, through its dispatcher queue.
+                let uiQueue = WinAppSDK.DispatcherQueue.getForCurrentThread()
                 instance.activated.addHandler { (_, args: AppActivationArguments?) in
                     guard let args else {
                         logger.warning("Received activation with no activation arguments?")
                         return
                     }
-                    self.processActivationArguments(args)
+                    let enqueued = (try? uiQueue?.tryEnqueue(.normal) {
+                        MainActor.assumeIsolated {
+                            self.processActivationArguments(args)
+                        }
+                    }) ?? false
+                    if !enqueued {
+                        logger.warning("Failed to hand an activation to the UI thread")
+                    }
                 }
 
                 callback()
